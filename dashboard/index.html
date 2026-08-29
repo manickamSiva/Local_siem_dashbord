@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiniSIEM Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    
+</head>
+
+<body>
+    <div class="container">
+
+        <header>
+    <div>
+        <h1>MiniSIEM</h1>
+        <p>Windows Security Monitoring</p>
+    </div>
+
+    <div class="header-controls">
+        <button id="refresh-button" onclick="manualRefresh()">↻ Refresh</button>
+        <span id="last-updated">Last updated: Never</span>
+
+        <div class="status" id="api-status">
+    <span class="status-dot" id="api-status-dot"></span>
+    <span id="api-status-text">Checking API...</span>
+</div>
+    </div>
+</header>
+
+        <!-- Statistics -->
+        <section class="stats">
+            <div class="card">
+                <h3>Total Events</h3>
+                <div id="total-events" class="number">-</div>
+            </div>
+
+            <div class="card">
+                <h3>Failed Logins</h3>
+                <div id="failed-logins" class="number danger">-</div>
+            </div>
+
+            <div class="card">
+                <h3>Successful Logins</h3>
+                <div id="successful-logins" class="number success">-</div>
+            </div>
+
+            <div class="card">
+                <h3>Active Alerts</h3>
+                <div id="active-alerts" class="number warning">-</div>
+            </div>
+
+            <div class="card">
+                <h3>Source IPs</h3>
+                <div id="source-ips" class="number">-</div>
+            </div>
+        </section>
+
+        <!-- Security Analytics -->
+        <section class="analytics">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Events by Category</h2>
+                </div>
+                <div id="category-chart" class="chart-container">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Severity Distribution</h2>
+                </div>
+                <div id="severity-chart" class="chart-container">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Content -->
+        <section class="content">
+
+            <!-- Events -->
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Recent Events</h2>
+                    <button onclick="loadEvents()">↻ Refresh</button>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>ID</th>
+                                <th>Event</th>
+                                <th>Category</th>
+                                <th>Severity</th>
+                                <th>User</th>
+                                <th>Source IP</th>
+                                <th>MITRE</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+
+                        <tbody id="events-table">
+                            <tr>
+                                <td colspan="9" class="loading">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Alerts -->
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Active Alerts</h2>
+                </div>
+
+                <div id="alerts-container">
+                    <div class="loading">Loading alerts...</div>
+                </div>
+            </div>
+
+        </section>
+
+                <!-- Resolved Alerts -->
+        <section class="panel resolved-alerts-panel">
+            <div class="panel-header">
+                <h2>Resolved Alerts</h2>
+                <button onclick="loadResolvedAlerts()">↻ Refresh</button>
+            </div>
+
+            <div id="resolved-alerts-container">
+                <div class="loading">Loading resolved alerts...</div>
+            </div>
+        </section>
+
+        <footer>
+            MiniSIEM • Local SOC Dashboard
+        </footer>
+
+    </div>
+
+    <!-- Alert Investigation Modal -->
+    <div id="investigation-modal" class="modal hidden">
+        <div class="modal-content" id="investigation-content">
+            <div class="loading">Loading investigation...</div>
+        </div>
+    </div>
+
+    <!-- Event Investigation Modal -->
+    <div id="event-modal" class="modal hidden">
+        <div class="modal-content">
+
+            <div class="modal-header">
+                <div>
+                    <h2>🔎 Event Investigation</h2>
+                    <span id="modal-event-severity" class="severity-badge">UNKNOWN</span>
+                </div>
+
+                <button class="modal-close" onclick="closeEventModal()">×</button>
+            </div>
+
+            <div class="event-details-grid">
+                <div class="detail-box">
+                    <span>Event ID</span>
+                    <strong id="modal-event-id">-</strong>
+                </div>
+
+                <div class="detail-box">
+                    <span>Event Name</span>
+                    <strong id="modal-event-name">-</strong>
+                </div>
+
+                <div class="detail-box">
+                    <span>Timestamp</span>
+                    <strong id="modal-event-time">-</strong>
+                </div>
+
+                <div class="detail-box">
+                    <span>Username</span>
+                    <strong id="modal-event-user">-</strong>
+                </div>
+
+                <div class="detail-box">
+                    <span>Source IP</span>
+                    <strong id="modal-event-ip">-</strong>
+                </div>
+
+                <div class="detail-box">
+                    <span>Category</span>
+                    <strong id="modal-event-category">-</strong>
+                </div>
+
+                <div class="detail-box">
+                    <span>MITRE Technique</span>
+                    <strong id="modal-event-mitre">-</strong>
+                </div>
+
+                <div class="detail-box">
+                    <span>Event Type</span>
+                    <strong id="modal-event-type">-</strong>
+                </div>
+            </div>
+
+            <div class="event-section">
+                <h3>Event Details</h3>
+                <div id="modal-event-details" class="event-details">
+                    No additional details available.
+                </div>
+            </div>
+
+            <div class="event-section">
+                <h3>Related Alert</h3>
+                <div id="modal-related-alert" class="related-alert">
+                    Checking for related alerts...
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
