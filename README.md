@@ -327,8 +327,8 @@ Administrator privileges may be required to access certain Windows Security Even
 Clone the repository:
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/MiniSIEM.git
-cd MiniSIEM
+git clone https://github.com/YOUR_USERNAME/Local_sien_dashboard.git
+cd Local_siem_dashbord
 ```
 
 Create a Python virtual environment:
@@ -592,11 +592,24 @@ The `.gitignore` file excludes local databases, virtual environments, and collec
 
 # ⚠️ Disclaimer
 
-MiniSIEM is an educational and research project.
+MiniSIEM is an open-source educational and research project designed to help developers, cybersecurity students, SOC analysts, and security enthusiasts understand how a basic Security Information and Event Management (SIEM) system works.
 
-It is not intended to replace enterprise SIEM, EDR, XDR, or security monitoring platforms.
+The project is intended for **learning, experimentation, development, and authorized security monitoring**.
 
-Only use MiniSIEM to monitor systems and networks that you own or have explicit authorization to monitor.
+You are welcome to:
+
+- Explore how the collector, database, detection engine, analyzer, API, and dashboard work together.
+- Modify and extend the detection rules and security analytics.
+- Add support for new Windows Event IDs and MITRE ATT&CK techniques.
+- Improve the dashboard and user interface.
+- Add new API endpoints and features.
+- Improve performance, reliability, and error handling.
+- Report bugs and suggest new features.
+- Submit pull requests and contribute improvements.
+
+Please only use MiniSIEM to monitor systems and security logs that you own or have **explicit authorization** to monitor.
+
+Contributions, ideas, improvements, and constructive feedback are welcome. The goal of this project is to continuously improve MiniSIEM while helping others learn how SIEM systems work internally.
 
 ---
 
