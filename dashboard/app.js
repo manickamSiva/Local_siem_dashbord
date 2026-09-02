@@ -1,749 +1,336 @@
 const API = "http://127.0.0.1:8000";
 
-async function fetchJSON(url, options = {}) {
-    const response = await fetch(url, options);
+function dashboard() {
+  return {
+    // status
+    apiOnline: false,
+    refreshing: false,
+    lastUpdated: "Last updated: never",
+    toast: "",
+    toastTimer: null,
 
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-    }
+    // data
+    stats: { total_events: 0, failed_logins: 0, successful_logins: 0, active_alerts: 0, unique_source_ips: 0 },
+    events: [],
+    eventsError: false,
+    alerts: [],
+    alertsError: false,
+    resolvedAlerts: [],
+    resolvedOpen: false,
+    categories: [],
+    severities: [],
+    eventFilter: null, // { type: 'category' | 'severity', value: string }
 
-    return response.json();
-}
+    // alert trend
+    trendDays: 14,
+    trend: [],
 
-async function loadStats() {
-    try {
-        const data = await fetchJSON(`${API}/api/stats`);
+    // related events (inline, per alert)
+    openRelated: null,
+    relatedLoading: null,
+    relatedEvents: {},
 
-        document.getElementById("total-events").textContent =
-            data.total_events;
+    // investigation modal
+    investigationOpen: false,
+    investigationLoading: false,
+    investigationAlert: null,
+    investigationEvents: [],
 
-        document.getElementById("failed-logins").textContent =
-            data.failed_logins;
+    // event modal
+    eventModalOpen: false,
+    selectedEvent: null,
 
-        document.getElementById("successful-logins").textContent =
-            data.successful_logins;
+    get kpis() {
+      const s = this.stats;
+      const denom = Math.max(s.total_events, 1);
+      return [
+        { label: "Total events", value: s.total_events, tone: "text-ink", barTone: "bg-info", bar: 100 },
+        { label: "Failed logins", value: s.failed_logins, tone: "text-critical", barTone: "bg-critical", bar: Math.min(100, (s.failed_logins / denom) * 100) },
+        { label: "Successful logins", value: s.successful_logins, tone: "text-signal", barTone: "bg-signal", bar: Math.min(100, (s.successful_logins / denom) * 100) },
+        { label: "Active alerts", value: s.active_alerts, tone: "text-warning", barTone: "bg-warning", bar: Math.min(100, (s.active_alerts / denom) * 100) },
+        { label: "Source IPs", value: s.unique_source_ips, tone: "text-ink", barTone: "bg-info", bar: Math.min(100, (s.unique_source_ips / denom) * 100) },
+      ];
+    },
 
-        document.getElementById("active-alerts").textContent =
-            data.active_alerts;
+    async init() {
+      await this.manualRefresh();
+      setInterval(() => this.manualRefresh(), 5000);
+    },
 
-        document.getElementById("source-ips").textContent =
-            data.unique_source_ips;
+    async fetchJSON(url, options = {}) {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    },
 
-    } catch (error) {
-        console.error("Failed to load statistics:", error);
+    showToast(message) {
+      this.toast = message;
+      clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => (this.toast = ""), 4000);
+    },
 
-        document.getElementById("total-events").textContent = "Failed";
-        document.getElementById("failed-logins").textContent = "Failed";
-        document.getElementById("successful-logins").textContent = "Failed";
-        document.getElementById("active-alerts").textContent = "Failed";
-        document.getElementById("source-ips").textContent = "Failed";
+    async checkAPIStatus() {
+      try {
+        const res = await fetch(`${API}/`, { method: "GET", cache: "no-store" });
+        this.apiOnline = res.ok;
+      } catch {
+        this.apiOnline = false;
+      }
+      return this.apiOnline;
+    },
 
-        throw error;
-    }
-}
+    async loadStats() {
+      try {
+        this.stats = await this.fetchJSON(`${API}/api/stats`);
+      } catch (e) {
+        console.error("Failed to load statistics:", e);
+      }
+    },
 
-async function checkAPIStatus() {
-    const statusText = document.getElementById("api-status-text");
-    const statusDot = document.getElementById("api-status-dot");
+    async loadEvents() {
+      try {
+        const params = new URLSearchParams();
+        // Filtered views pull a much larger window so drilling into a
+        // category/severity actually shows the matching events, not
+        // just whichever happened to be in the last 20 overall.
+        params.set("limit", this.eventFilter ? "200" : "20");
+        if (this.eventFilter) {
+          params.set(this.eventFilter.type, this.eventFilter.value);
+        }
+        const data = await this.fetchJSON(`${API}/api/events?${params.toString()}`);
+        this.events = data.events || [];
+        this.eventsError = false;
+      } catch (e) {
+        console.error("Failed to load events:", e);
+        this.events = [];
+        this.eventsError = true;
+      }
+    },
 
-    try {
-        const response = await fetch(`${API}/`, {
-            method: "GET",
-            cache: "no-store"
+    filterByCategory(category) {
+      const isSame = this.eventFilter?.type === "category" && this.eventFilter?.value === category;
+      this.eventFilter = isSame ? null : { type: "category", value: category };
+      this.loadEvents();
+    },
+
+    filterBySeverity(severity) {
+      const isSame = this.eventFilter?.type === "severity" && this.eventFilter?.value === severity;
+      this.eventFilter = isSame ? null : { type: "severity", value: severity };
+      this.loadEvents();
+    },
+
+    clearEventFilter() {
+      this.eventFilter = null;
+      this.loadEvents();
+    },
+
+    async loadAlerts() {
+      try {
+        const data = await this.fetchJSON(`${API}/api/alerts`);
+        this.alerts = data.alerts || [];
+        this.alertsError = false;
+      } catch (e) {
+        console.error("Failed to load alerts:", e);
+        this.alerts = [];
+        this.alertsError = true;
+      }
+    },
+
+    async loadResolvedAlerts() {
+      try {
+        const data = await this.fetchJSON(`${API}/api/alerts?status=RESOLVED`);
+        this.resolvedAlerts = data.alerts || [];
+      } catch (e) {
+        console.error("Failed to load resolved alerts:", e);
+      }
+    },
+
+    async loadCategories() {
+      try {
+        const data = await this.fetchJSON(`${API}/api/categories`);
+        const cats = data.categories || [];
+        const max = Math.max(...cats.map((c) => c.count), 1);
+        this.categories = cats.map((c) => ({ ...c, pct: (c.count / max) * 100 }));
+      } catch (e) {
+        console.error("Failed to load categories:", e);
+      }
+    },
+
+    async loadSeverity() {
+      try {
+        const data = await this.fetchJSON(`${API}/api/severity`);
+        const sev = data.severity || [];
+        const max = Math.max(...sev.map((s) => s.count), 1);
+        this.severities = sev.map((s) => ({ ...s, pct: (s.count / max) * 100 }));
+      } catch (e) {
+        console.error("Failed to load severity data:", e);
+      }
+    },
+
+    async loadTrend() {
+      const BAR_HEIGHT_PX = 150;
+      const severityOrder = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"];
+      const labelStep = this.trendDays <= 7 ? 1 : this.trendDays <= 14 ? 2 : 5;
+
+      try {
+        const data = await this.fetchJSON(`${API}/api/alerts/trend?days=${this.trendDays}`);
+        const rows = data.trend || [];
+
+        const totals = rows.map((r) => Object.values(r.severities || {}).reduce((a, b) => a + b, 0));
+        const maxTotal = Math.max(...totals, 1);
+
+        this.trend = rows.map((r, idx) => {
+          const severities = r.severities || {};
+          const total = totals[idx];
+          const segments = severityOrder
+            .filter((sev) => severities[sev])
+            .map((sev) => ({
+              severity: sev,
+              count: severities[sev],
+              px: Math.max(2, (severities[sev] / maxTotal) * BAR_HEIGHT_PX),
+            }));
+          const d = new Date(`${r.day}T00:00:00`);
+          return {
+            day: r.day,
+            total,
+            segments,
+            label: idx % labelStep === 0 ? `${d.getMonth() + 1}/${d.getDate()}` : "",
+          };
         });
+      } catch (e) {
+        console.error("Failed to load alert trend:", e);
+        this.trend = [];
+      }
+    },
 
-        if (!response.ok) {
-            throw new Error(`API returned ${response.status}`);
-        }
+    setTrendDays(days) {
+      this.trendDays = days;
+      this.loadTrend();
+    },
 
-        if (statusText) {
-            statusText.textContent = "API Online";
-        }
-
-        if (statusDot) {
-            statusDot.classList.remove("offline");
-            statusDot.classList.add("online");
-        }
-
-        return true;
-
-    } catch (error) {
-
-        console.error("API status check failed:", error);
-
-        if (statusText) {
-            statusText.textContent = "API Offline";
-        }
-
-        if (statusDot) {
-            statusDot.classList.remove("online");
-            statusDot.classList.add("offline");
-        }
-
-        return false;
-    }
-}
-
-async function loadEvents() {
-    const table = document.getElementById("events-table");
-
-    try {
-        const data = await fetchJSON(`${API}/api/events?limit=20`);
-
-        table.innerHTML = "";
-
-        if (!data.events || data.events.length === 0) {
-            table.innerHTML = `
-                <tr>
-                    <td colspan="9" class="loading">
-                        No events found
-                    </td>
-                </tr>
-            `;
-
-            return;
-        }
-
-        data.events.forEach(event => {
-            const row = document.createElement("tr");
-
-            row.innerHTML = `
-                <td>${escapeHtml(event.timestamp || "-")}</td>
-                <td>${escapeHtml(String(event.event_id || "-"))}</td>
-                <td>${escapeHtml(event.event_name || "Other")}</td>
-                <td>${escapeHtml(event.category || "-")}</td>
-
-                <td>
-                    <span class="severity ${getSeverityClass(event.severity)}">
-                        ${escapeHtml(event.severity || "UNKNOWN")}
-                    </span>
-                </td>
-
-                <td>${escapeHtml(event.username || "-")}</td>
-                <td>${escapeHtml(event.source_ip || "-")}</td>
-                <td>${escapeHtml(event.mitre_technique || "-")}</td>
-
-                <td class="event-action-cell"></td>
-            `;
-
-            const button = document.createElement("button");
-
-            button.className = "view-event-button";
-            button.textContent = "View Event";
-
-            button.addEventListener("click", () => {
-                viewEvent(event);
-            });
-
-            row
-                .querySelector(".event-action-cell")
-                .appendChild(button);
-
-            table.appendChild(row);
-        });
-
-    } catch (error) {
-        console.error("Failed to load events:", error);
-
-        table.innerHTML = `
-            <tr>
-                <td colspan="9" class="loading">
-                    ❌ Failed to load events
-                </td>
-            </tr>
-        `;
-
-        throw error;
-    }
-}
-
-async function loadAlerts() {
-    const container = document.getElementById("alerts-container");
-
-    try {
-        const data = await fetchJSON(`${API}/api/alerts`);
-
-        container.innerHTML = "";
-
-        if (!data.alerts?.length) {
-            container.innerHTML = `<div class="loading">No active alerts</div>`;
-            return;
-        }
-
-        data.alerts.forEach(alert => {
-            const element = document.createElement("div");
-            const severity = (alert.severity || "UNKNOWN").toLowerCase();
-
-            element.className = `alert alert-${severity}`;
-
-            element.innerHTML = `
-                <div class="alert-title">
-                    🚨 ${escapeHtml(alert.alert_type)}
-                    <span class="severity-${severity}">
-                        [${escapeHtml(alert.severity || "UNKNOWN")}]
-                    </span>
-                </div>
-
-                <div class="alert-info">User: ${escapeHtml(alert.username || "-")}</div>
-                <div class="alert-info">Source: ${escapeHtml(alert.source_ip || "-")}</div>
-                <div class="alert-info">MITRE: ${escapeHtml(alert.mitre_technique || "-")}</div>
-                <div class="alert-info">Status: <strong>${escapeHtml(alert.status || "-")}</strong></div>
-                <div class="alert-info">${escapeHtml(alert.description || "")}</div>
-
-                <div class="alert-actions">
-                    <button onclick="viewRelatedEvents(${alert.id})">View Events</button>
-                    <button onclick="investigateAlert(${alert.id})">Investigate</button>
-                    <button class="resolve-button" onclick="updateAlertStatus(${alert.id}, 'RESOLVED')">Resolve</button>
-                </div>
-
-                <div id="related-events-${alert.id}" class="related-events"></div>
-            `;
-
-            container.appendChild(element);
-        });
-
-    } catch (error) {
-        console.error("Failed to load alerts:", error);
-
-        container.innerHTML = `
-            <div class="loading">
-                ❌ Failed to load active alerts
-            </div>
-        `;
-
-        throw error;
-    }
-}
-
-async function loadResolvedAlerts() {
-    const container = document.getElementById("resolved-alerts-container");
-
-    if (!container) {
+    async toggleRelated(alertId) {
+      if (this.openRelated === alertId) {
+        this.openRelated = null;
         return;
-    }
+      }
+      this.openRelated = alertId;
+      this.relatedLoading = alertId;
+      try {
+        const data = await this.fetchJSON(`${API}/api/alerts/${alertId}/events`);
+        this.relatedEvents[alertId] = data.events || [];
+      } catch (e) {
+        console.error("Failed to load related events:", e);
+        this.relatedEvents[alertId] = [];
+      } finally {
+        this.relatedLoading = null;
+      }
+    },
 
-    try {
-        const data = await fetchJSON(`${API}/api/alerts?status=RESOLVED`);
-
-        container.innerHTML = "";
-
-        if (!data.alerts || data.alerts.length === 0) {
-            container.innerHTML = `
-                <div class="loading">
-                    No resolved alerts
-                </div>
-            `;
-            return;
-        }
-
-        data.alerts.forEach(alert => {
-            const severity = (alert.severity || "UNKNOWN").toLowerCase();
-
-            const element = document.createElement("div");
-
-            element.className = `alert resolved-alert alert-${severity}`;
-
-            element.innerHTML = `
-                <div class="alert-title">
-                    ✅ ${escapeHtml(alert.alert_type || "Alert")}
-                    <span class="severity-${severity}">
-                        [${escapeHtml(alert.severity || "UNKNOWN")}]
-                    </span>
-                </div>
-
-                <div class="alert-info">
-                    User: ${escapeHtml(alert.username || "-")}
-                </div>
-
-                <div class="alert-info">
-                    Source: ${escapeHtml(alert.source_ip || "-")}
-                </div>
-
-                <div class="alert-info">
-                    MITRE: ${escapeHtml(alert.mitre_technique || "-")}
-                </div>
-
-                <div class="alert-info">
-                    Status:
-                    <strong>RESOLVED</strong>
-                </div>
-
-                <div class="alert-info">
-                    ${escapeHtml(alert.description || "")}
-                </div>
-
-                <div class="alert-actions">
-                    <button onclick="viewRelatedEvents(${alert.id})">
-                        View Events
-                    </button>
-
-                    <button onclick="investigateAlert(${alert.id})">
-                        View Investigation
-                    </button>
-                </div>
-
-                <div id="related-events-${alert.id}"
-                     class="related-events">
-                </div>
-            `;
-
-            container.appendChild(element);
-        });
-
-    } catch (error) {
-        console.error("Failed to load resolved alerts:", error);
-
-        container.innerHTML = `
-            <div class="loading">
-                ❌ Failed to load resolved alerts
-            </div>
-        `;
-
-        throw error;
-    }
-}
-
-async function viewRelatedEvents(alertId) {
-    const container = document.getElementById(`related-events-${alertId}`);
-
-    if (!container) {
-        return;
-    }
-
-    container.innerHTML = `<div class="loading">Loading related events...</div>`;
-
-    try {
-        const data = await fetchJSON(`${API}/api/alerts/${alertId}/events`);
-
-        if (!data.events?.length) {
-            container.innerHTML = `<div class="loading">No related events found</div>`;
-            return;
-        }
-
-        container.innerHTML = `
-            <div class="related-title">Related Events (${data.count})</div>
-
-            <div class="related-event-list">
-                ${data.events.map(event => `
-                    <div class="related-event">
-                        <div>
-                            <strong>Event ${event.event_id}</strong> -
-                            ${escapeHtml(event.event_name || "Unknown")}
-                        </div>
-                        <div class="alert-info">Time: ${escapeHtml(event.timestamp || "-")}</div>
-                        <div class="alert-info">User: ${escapeHtml(event.username || "-")}</div>
-                        <div class="alert-info">Source: ${escapeHtml(event.source_ip || "-")}</div>
-                    </div>
-                `).join("")}
-            </div>
-        `;
-
-    } catch (error) {
-        console.error("Failed to load related events:", error);
-
-        container.innerHTML = `<div class="loading">Failed to load related events</div>`;
-    }
-}
-
-async function investigateAlert(alertId) {
-    const modal = document.getElementById("investigation-modal");
-    const content = document.getElementById("investigation-content");
-
-    modal.classList.remove("hidden");
-    content.innerHTML = `<div class="loading">Loading investigation...</div>`;
-
-    try {
-        const alertData = await fetchJSON(`${API}/api/alerts/${alertId}`);
-        const eventData = await fetchJSON(`${API}/api/alerts/${alertId}/events`);
-
-        const severity = alertData.severity || "UNKNOWN";
-
-        content.innerHTML = `
-            <div class="investigation-header">
-                <div>
-                    <h2>🚨 ${escapeHtml(alertData.alert_type)}</h2>
-                    <span class="severity-${severity.toLowerCase()}">
-                        ${escapeHtml(severity)}
-                    </span>
-                </div>
-
-                <button class="close-button" onclick="closeInvestigation()">✕</button>
-            </div>
-
-            <div class="investigation-grid">
-                <div class="investigation-item">
-                    <span>Alert ID</span>
-                    <strong>#${alertData.id}</strong>
-                </div>
-
-                <div class="investigation-item">
-                    <span>Status</span>
-                    <strong>${escapeHtml(alertData.status)}</strong>
-                </div>
-
-                <div class="investigation-item">
-                    <span>Source IP</span>
-                    <strong>${escapeHtml(alertData.source_ip || "-")}</strong>
-                </div>
-
-                <div class="investigation-item">
-                    <span>Username</span>
-                    <strong>${escapeHtml(alertData.username || "-")}</strong>
-                </div>
-
-                <div class="investigation-item">
-                    <span>MITRE Technique</span>
-                    <strong>${escapeHtml(alertData.mitre_technique || "-")}</strong>
-                </div>
-
-                <div class="investigation-item">
-                    <span>Related Events</span>
-                    <strong>${eventData.count}</strong>
-                </div>
-            </div>
-
-            <div class="investigation-section">
-                <h3>Description</h3>
-                <p>${escapeHtml(alertData.description || "-")}</p>
-            </div>
-
-            <div class="investigation-section">
-                <h3>Related Events</h3>
-
-                <div class="investigation-timeline">
-                    ${eventData.events.length
-                        ? eventData.events.slice().reverse().map((event, index) => `
-                            <div class="timeline-item">
-                                <div class="timeline-marker">${index + 1}</div>
-                                <div class="timeline-line"></div>
-
-                                <div class="timeline-content">
-                                    <div class="timeline-header">
-                                        <strong>Event ${event.event_id}</strong>
-                                        <span>${escapeHtml(event.event_name || "Unknown")}</span>
-                                    </div>
-
-                                    <div class="timeline-time">${escapeHtml(event.timestamp || "-")}</div>
-
-                                    <div class="timeline-details">
-                                        <div>
-                                            <span>User</span>
-                                            <strong>${escapeHtml(event.username || "-")}</strong>
-                                        </div>
-                                        <div>
-                                            <span>Source IP</span>
-                                            <strong>${escapeHtml(event.source_ip || "-")}</strong>
-                                        </div>
-                                        <div>
-                                            <span>Event Type</span>
-                                            <strong>${escapeHtml(event.event_type || "-")}</strong>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        `).join("")
-                        : `<div class="loading">No related events</div>`
-                    }
-                </div>
-            </div>
-
-            <div class="investigation-actions">
-    ${
-        alertData.status === "RESOLVED"
-        ? `
-            <div class="resolved-status-message">
-                ✅ This alert has been resolved.
-            </div>
-        `
-        : `
-            <button
-                onclick="updateAlertStatus(${alertData.id}, 'INVESTIGATING'); closeInvestigation();"
-                ${alertData.status === "INVESTIGATING" ? "disabled" : ""}
-            >
-                Investigating
-            </button>
-
-            <button
-                class="resolve-button"
-                onclick="updateAlertStatus(${alertData.id}, 'RESOLVED'); closeInvestigation();"
-            >
-                Resolve Alert
-            </button>
-        `
-    }
-</div>
-        `;
-
-    } catch (error) {
-        console.error("Failed to investigate alert:", error);
-
-        content.innerHTML = `
-            <div class="loading">
-                Failed to load investigation data.
-                <br><br>
-                <button onclick="closeInvestigation()">Close</button>
-            </div>
-        `;
-    }
-}
-
-function closeInvestigation() {
-    const modal = document.getElementById("investigation-modal");
-    modal.classList.add("hidden");
-}
-
-async function updateAlertStatus(alertId, status) {
-    try {
-        const data = await fetchJSON(`${API}/api/alerts/${alertId}/status`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status })
-        });
-
-        console.log(`Alert ${alertId} → ${data.status}`);
-
-        await Promise.all([
-            loadAlerts(),
-            loadStats()
+    async investigate(alertId) {
+      this.investigationOpen = true;
+      this.investigationLoading = true;
+      this.investigationAlert = null;
+      this.investigationEvents = [];
+      try {
+        const [alertData, eventData] = await Promise.all([
+          this.fetchJSON(`${API}/api/alerts/${alertId}`),
+          this.fetchJSON(`${API}/api/alerts/${alertId}/events`),
         ]);
+        this.investigationAlert = alertData;
+        this.investigationEvents = eventData.events || [];
+      } catch (e) {
+        console.error("Failed to investigate alert:", e);
+        this.investigationOpen = false;
+        this.showToast("Failed to load investigation data.");
+      } finally {
+        this.investigationLoading = false;
+      }
+    },
 
-    } catch (error) {
-        console.error("Failed to update alert status:", error);
-        alert("Failed to update alert status.");
-    }
-}
-
-function getSeverityClass(severity) {
-    return severity ? severity.toLowerCase() : "unknown";
-}
-
-function escapeHtml(value) {
-    const div = document.createElement("div");
-    div.textContent = value;
-    return div.innerHTML;
-}
-
-async function loadCategories() {
-    const container = document.getElementById("category-chart");
-
-    if (!container) {
-        return;
-    }
-
-    try {
-        const data = await fetchJSON(`${API}/api/categories`);
-
-        container.innerHTML = "";
-
-        if (!data.categories?.length) {
-            container.innerHTML = `<div class="loading">No category data</div>`;
-            return;
-        }
-
-        const maxCount = Math.max(...data.categories.map(item => item.count));
-
-        data.categories.forEach(item => {
-            const percentage = (item.count / maxCount) * 100;
-            const row = document.createElement("div");
-
-            row.className = "chart-row";
-
-            row.innerHTML = `
-                <div class="chart-label">
-                    <span class="category-name">${escapeHtml(item.category)}</span>
-                    <span class="chart-count">${item.count}</span>
-                </div>
-
-                <div class="chart-bar-container">
-                    <div class="chart-bar" style="width: ${percentage}%"></div>
-                </div>
-            `;
-
-            container.appendChild(row);
+    async setStatus(alertId, status) {
+      try {
+        const data = await this.fetchJSON(`${API}/api/alerts/${alertId}/status`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
         });
+        await Promise.all([this.loadAlerts(), this.loadResolvedAlerts(), this.loadStats()]);
+        console.log(`Alert ${alertId} -> ${data.status}`);
+      } catch (e) {
+        console.error("Failed to update alert status:", e);
+        this.showToast(`Failed to update alert #${alertId}. Check whether the API is running.`);
+      }
+    },
 
-    } catch (error) {
-        console.error("Failed to load categories:", error);
+    viewEvent(event) {
+      this.selectedEvent = event;
+      this.eventModalOpen = true;
+    },
 
-        container.innerHTML = `
-            <div class="loading">
-                ❌ Failed to load category data
-            </div>
-        `;
-
-        throw error;
-    }
-}
-
-async function loadSeverity() {
-    const container = document.getElementById("severity-chart");
-
-    if (!container) {
-        return;
-    }
-
-    try {
-        const data = await fetchJSON(`${API}/api/severity`);
-
-        container.innerHTML = "";
-
-        if (!data.severity?.length) {
-            container.innerHTML = `<div class="loading">No severity data</div>`;
-            return;
-        }
-
-        const maxCount = Math.max(...data.severity.map(item => item.count));
-
-        data.severity.forEach(item => {
-            const severity = item.severity || "UNKNOWN";
-            const percentage = (item.count / maxCount) * 100;
-            const row = document.createElement("div");
-
-            row.className = "chart-row";
-
-            row.innerHTML = `
-                <div class="chart-label">
-                    <span class="category-name">${escapeHtml(severity)}</span>
-                    <span class="chart-count">${item.count}</span>
-                </div>
-
-                <div class="chart-bar-container">
-                    <div class="chart-bar severity-${severity}" style="width: ${percentage}%"></div>
-                </div>
-            `;
-
-            container.appendChild(row);
+    async manualRefresh() {
+      this.refreshing = true;
+      try {
+        await this.checkAPIStatus();
+        const results = await Promise.allSettled([
+          this.loadStats(),
+          this.loadEvents(),
+          this.loadAlerts(),
+          this.loadCategories(),
+          this.loadSeverity(),
+          this.loadTrend(),
+          ...(this.resolvedOpen ? [this.loadResolvedAlerts()] : []),
+        ]);
+        results.forEach((r, i) => {
+          if (r.status === "rejected") console.error(`Dashboard section ${i + 1} failed:`, r.reason);
         });
+        this.lastUpdated = `Last updated: ${new Date().toLocaleTimeString()}`;
+      } finally {
+        this.refreshing = false;
+      }
+    },
 
-    } catch (error) {
-        console.error("Failed to load severity:", error);
-
-        container.innerHTML = `
-            <div class="loading">
-                ❌ Failed to load severity data
-            </div>
-        `;
-
-        throw error;
-    }
+    // ---- styling helpers ----
+    severityText(sev) {
+      const s = (sev || "").toUpperCase();
+      if (s === "HIGH" || s === "CRITICAL") return "text-critical";
+      if (s === "MEDIUM") return "text-warning";
+      if (s === "LOW") return "text-signal";
+      return "text-muted";
+    },
+    severityDot(sev) {
+      const s = (sev || "").toUpperCase();
+      if (s === "HIGH" || s === "CRITICAL") return "bg-critical";
+      if (s === "MEDIUM") return "bg-warning";
+      if (s === "LOW") return "bg-signal";
+      return "bg-faint";
+    },
+    severityBorder(sev) {
+      const s = (sev || "").toUpperCase();
+      if (s === "HIGH" || s === "CRITICAL") return "border-critical";
+      if (s === "MEDIUM") return "border-warning";
+      if (s === "LOW") return "border-signal";
+      return "border-faint";
+    },
+    severityBg(sev) {
+      const s = (sev || "").toUpperCase();
+      if (s === "HIGH" || s === "CRITICAL") return "bg-criticaldim";
+      if (s === "MEDIUM") return "bg-warningdim";
+      if (s === "LOW") return "bg-signaldim";
+      return "bg-raised";
+    },
+    severityBarTone(sev) {
+      const s = (sev || "").toUpperCase();
+      if (s === "HIGH" || s === "CRITICAL") return "bg-critical";
+      if (s === "MEDIUM") return "bg-warning";
+      if (s === "LOW") return "bg-signal";
+      return "bg-faint";
+    },
+    statusTone(status) {
+      const s = (status || "NEW").toUpperCase();
+      if (s === "NEW") return "bg-criticaldim text-critical";
+      if (s === "INVESTIGATING") return "bg-warningdim text-warning";
+      if (s === "RESOLVED") return "bg-signaldim text-signal";
+      return "bg-raised text-muted";
+    },
+  };
 }
-
-function viewEvent(event) {
-    const modal = document.getElementById("event-modal");
-
-    if (!modal) {
-        console.error("Event modal not found.");
-        return;
-    }
-
-    document.getElementById("modal-event-id").textContent = event.event_id || "-";
-    document.getElementById("modal-event-name").textContent = event.event_name || "Other";
-    document.getElementById("modal-event-time").textContent = event.timestamp || "-";
-    document.getElementById("modal-event-user").textContent = event.username || "-";
-    document.getElementById("modal-event-ip").textContent = event.source_ip || "-";
-    document.getElementById("modal-event-category").textContent = event.category || "-";
-    document.getElementById("modal-event-mitre").textContent = event.mitre_technique || "-";
-    document.getElementById("modal-event-type").textContent = event.event_type || "-";
-
-    const severity = event.severity || "UNKNOWN";
-    const severityElement = document.getElementById("modal-event-severity");
-
-    severityElement.textContent = severity;
-    severityElement.className = `severity-badge severity-${severity.toLowerCase()}`;
-
-    const detailsElement = document.getElementById("modal-event-details");
-
-    detailsElement.textContent =
-        event.description || event.message || "No additional event details available.";
-
-    const relatedAlert = document.getElementById("modal-related-alert");
-
-    relatedAlert.innerHTML = `
-        <div>
-            <strong>Event ID ${escapeHtml(String(event.event_id || "-"))}</strong> is being viewed.
-        </div>
-        <div style="margin-top: 8px;">Source: ${escapeHtml(event.source_ip || "-")}</div>
-        <div>User: ${escapeHtml(event.username || "-")}</div>
-    `;
-
-    modal.classList.remove("hidden");
-}
-
-function closeEventModal() {
-    const modal = document.getElementById("event-modal");
-
-    if (modal) {
-        modal.classList.add("hidden");
-    }
-}
-
-document.addEventListener("keydown", event => {
-    if (event.key === "Escape") {
-        closeEventModal();
-    }
-});
-
-document.getElementById("event-modal")?.addEventListener("click", event => {
-    if (event.target.id === "event-modal") {
-        closeEventModal();
-    }
-});
-
-async function manualRefresh() {
-    const button = document.getElementById("refresh-button");
-
-    if (button) {
-        button.disabled = true;
-        button.textContent = "↻ Refreshing...";
-    }
-
-    try {
-        await checkAPIStatus();
-
-        await refreshDashboard();
-
-        const lastUpdated =
-            document.getElementById("last-updated");
-
-        if (lastUpdated) {
-            lastUpdated.textContent =
-                `Last updated: ${new Date().toLocaleTimeString()}`;
-        }
-
-    } finally {
-        if (button) {
-            button.disabled = false;
-            button.textContent = "↻ Refresh";
-        }
-    }
-}
-
-async function refreshDashboard() {
-    console.log(
-        "🔄 Dashboard refresh:",
-        new Date().toLocaleTimeString()
-    );
-
-    const results = await Promise.allSettled([
-        loadStats(),
-        loadEvents(),
-        loadAlerts(),
-        loadResolvedAlerts(),
-        loadCategories(),
-        loadSeverity()
-    ]);
-
-    results.forEach((result, index) => {
-        if (result.status === "rejected") {
-            console.error(
-                `Dashboard section ${index + 1} failed:`,
-                result.reason
-            );
-        }
-    });
-}
-
-
-manualRefresh();
-
-setInterval(manualRefresh, 5000);

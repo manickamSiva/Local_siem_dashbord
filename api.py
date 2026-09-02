@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Query, HTTPException  # type: ignore[import-not-found]
 from pydantic import BaseModel  # type: ignore[import-not-found]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import-not-found]
+from typing import Optional
+from datetime import date, timedelta
 import sqlite3
 
 
@@ -128,11 +130,49 @@ def get_stats():
 # ==========================================================
 
 @app.get("/api/events")
-def get_events(limit: int = Query(default=50, ge=1, le=500)):
+def get_events(
+    limit: int = Query(default=50, ge=1, le=500),
+    category: Optional[str] = Query(default=None),
+    severity: Optional[str] = Query(default=None),
+    source_ip: Optional[str] = Query(default=None),
+    username: Optional[str] = Query(default=None),
+):
     connection = get_connection()
     cursor = connection.cursor()
 
-    cursor.execute("""
+    conditions = []
+    params = []
+
+    # /api/categories and /api/severity report NULL rows under the labels
+    # "Other" / "UNKNOWN", so clicking through on those labels needs to
+    # match NULL here too, not just the literal string.
+    if category:
+        if category == "Other":
+            conditions.append("(category IS NULL OR category = ?)")
+            params.append(category)
+        else:
+            conditions.append("category = ?")
+            params.append(category)
+
+    if severity:
+        if severity == "UNKNOWN":
+            conditions.append("(severity IS NULL OR severity = ?)")
+            params.append(severity)
+        else:
+            conditions.append("severity = ?")
+            params.append(severity)
+
+    if source_ip:
+        conditions.append("source_ip = ?")
+        params.append(source_ip)
+
+    if username:
+        conditions.append("username = ?")
+        params.append(username)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    cursor.execute(f"""
         SELECT
             id,
             timestamp,
@@ -153,9 +193,10 @@ def get_events(limit: int = Query(default=50, ge=1, le=500)):
             authentication_package,
             message
         FROM events
+        {where_clause}
         ORDER BY id DESC
         LIMIT ?
-    """, (limit,))
+    """, (*params, limit))
 
     rows = cursor.fetchall()
 
@@ -260,6 +301,52 @@ def get_alerts(status: str = Query(default="ACTIVE")):
     return {
         "count": len(rows),
         "alerts": [dict(row) for row in rows]
+    }
+
+
+# ==========================================================
+# ALERT TREND (alerts per day, by severity)
+# ==========================================================
+
+@app.get("/api/alerts/trend")
+def get_alert_trend(days: int = Query(default=14, ge=1, le=90)):
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    # alerts.created_at is stored as "YYYY-MM-DD HH:MM:SS", which SQLite's
+    # date() function parses natively (unlike events.timestamp).
+    cursor.execute("""
+        SELECT
+            date(created_at) AS day,
+            COALESCE(severity, 'UNKNOWN') AS severity,
+            COUNT(*) AS count
+        FROM alerts
+        WHERE created_at IS NOT NULL
+          AND date(created_at) >= date('now', ?)
+        GROUP BY day, severity
+        ORDER BY day ASC
+    """, (f"-{days - 1} days",))
+
+    rows = cursor.fetchall()
+    connection.close()
+
+    # Build a dense, zero-filled day list so the frontend gets one entry
+    # per day in range even if no alerts fired that day.
+    today = date.today()
+    day_list = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
+
+    by_day = {d: {} for d in day_list}
+    for row in rows:
+        d = row["day"]
+        if d in by_day:
+            by_day[d][row["severity"]] = row["count"]
+
+    return {
+        "days": day_list,
+        "trend": [
+            {"day": d, "severities": by_day[d]}
+            for d in day_list
+        ]
     }
 
 

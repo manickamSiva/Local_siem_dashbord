@@ -1,227 +1,552 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MiniSIEM Dashboard</title>
-    <link rel="stylesheet" href="style.css">
-    
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiniSIEM · Windows Security Monitoring</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          canvas:        '#0A0E16',
+          surface:       '#121826',
+          raised:        '#1A2233',
+          hairline:      '#232C40',
+          hairline2:     '#2C3752',
+          ink:           '#E7ECF5',
+          muted:         '#8A97AC',
+          faint:         '#5C6884',
+          signal:        '#3DDC97',
+          signaldim:     '#1F5C46',
+          critical:      '#FF5D5D',
+          criticaldim:   '#4A2429',
+          warning:       '#FFB454',
+          warningdim:    '#4A3A1E',
+          info:          '#5AA9E6',
+          infodim:       '#1E3448',
+        },
+        fontFamily: {
+          sans: ['"Space Grotesk"', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+
+<script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+<link rel="stylesheet" href="style.css">
 </head>
 
-<body>
-    <div class="container">
+<body x-data="dashboard()" x-init="init()" class="bg-canvas text-ink font-sans antialiased min-h-screen">
 
-        <header>
-    <div>
-        <h1>MiniSIEM</h1>
-        <p>Windows Security Monitoring</p>
-    </div>
+  <!-- Toast -->
+  <div
+    x-show="toast"
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0 -translate-y-2"
+    x-transition:enter-end="opacity-100 translate-y-0"
+    x-transition:leave="transition ease-in duration-150"
+    x-transition:leave-start="opacity-100"
+    x-transition:leave-end="opacity-0"
+    class="fixed top-5 right-5 z-[100] max-w-sm bg-raised border border-critical/40 rounded px-4 py-3 shadow-lg shadow-black/40"
+    style="display: none;"
+  >
+    <p class="text-sm text-ink" x-text="toast"></p>
+  </div>
 
-    <div class="header-controls">
-        <button id="refresh-button" onclick="manualRefresh()">↻ Refresh</button>
-        <span id="last-updated">Last updated: Never</span>
+  <div class="max-w-[1500px] mx-auto px-6 py-8">
 
-        <div class="status" id="api-status">
-    <span class="status-dot" id="api-status-dot"></span>
-    <span id="api-status-text">Checking API...</span>
-</div>
-    </div>
-</header>
-
-        <!-- Statistics -->
-        <section class="stats">
-            <div class="card">
-                <h3>Total Events</h3>
-                <div id="total-events" class="number">-</div>
-            </div>
-
-            <div class="card">
-                <h3>Failed Logins</h3>
-                <div id="failed-logins" class="number danger">-</div>
-            </div>
-
-            <div class="card">
-                <h3>Successful Logins</h3>
-                <div id="successful-logins" class="number success">-</div>
-            </div>
-
-            <div class="card">
-                <h3>Active Alerts</h3>
-                <div id="active-alerts" class="number warning">-</div>
-            </div>
-
-            <div class="card">
-                <h3>Source IPs</h3>
-                <div id="source-ips" class="number">-</div>
-            </div>
-        </section>
-
-        <!-- Security Analytics -->
-        <section class="analytics">
-            <div class="panel">
-                <div class="panel-header">
-                    <h2>Events by Category</h2>
-                </div>
-                <div id="category-chart" class="chart-container">
-                    <div class="loading">Loading...</div>
-                </div>
-            </div>
-
-            <div class="panel">
-                <div class="panel-header">
-                    <h2>Severity Distribution</h2>
-                </div>
-                <div id="severity-chart" class="chart-container">
-                    <div class="loading">Loading...</div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Main Content -->
-        <section class="content">
-
-            <!-- Events -->
-            <div class="panel">
-                <div class="panel-header">
-                    <h2>Recent Events</h2>
-                    <button onclick="loadEvents()">↻ Refresh</button>
-                </div>
-
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>ID</th>
-                                <th>Event</th>
-                                <th>Category</th>
-                                <th>Severity</th>
-                                <th>User</th>
-                                <th>Source IP</th>
-                                <th>MITRE</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-
-                        <tbody id="events-table">
-                            <tr>
-                                <td colspan="9" class="loading">Loading...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Alerts -->
-            <div class="panel">
-                <div class="panel-header">
-                    <h2>Active Alerts</h2>
-                </div>
-
-                <div id="alerts-container">
-                    <div class="loading">Loading alerts...</div>
-                </div>
-            </div>
-
-        </section>
-
-                <!-- Resolved Alerts -->
-        <section class="panel resolved-alerts-panel">
-            <div class="panel-header">
-                <h2>Resolved Alerts</h2>
-                <button onclick="loadResolvedAlerts()">↻ Refresh</button>
-            </div>
-
-            <div id="resolved-alerts-container">
-                <div class="loading">Loading resolved alerts...</div>
-            </div>
-        </section>
-
-        <footer>
-            MiniSIEM • Local SOC Dashboard
-        </footer>
-
-    </div>
-
-    <!-- Alert Investigation Modal -->
-    <div id="investigation-modal" class="modal hidden">
-        <div class="modal-content" id="investigation-content">
-            <div class="loading">Loading investigation...</div>
+    <!-- Header -->
+    <header class="flex flex-wrap items-center justify-between gap-4 pb-6 mb-6 border-b border-hairline">
+      <div class="flex items-center gap-3">
+        <span class="relative flex h-2.5 w-2.5">
+          <span
+            class="absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping"
+            :class="apiOnline ? 'bg-signal' : 'bg-critical'"
+          ></span>
+          <span
+            class="relative inline-flex rounded-full h-2.5 w-2.5"
+            :class="apiOnline ? 'bg-signal' : 'bg-critical'"
+          ></span>
+        </span>
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight leading-none">MiniSIEM</h1>
+          <p class="text-sm text-muted mt-1">Windows security monitoring</p>
         </div>
-    </div>
+      </div>
 
-    <!-- Event Investigation Modal -->
-    <div id="event-modal" class="modal hidden">
-        <div class="modal-content">
-
-            <div class="modal-header">
-                <div>
-                    <h2>🔎 Event Investigation</h2>
-                    <span id="modal-event-severity" class="severity-badge">UNKNOWN</span>
-                </div>
-
-                <button class="modal-close" onclick="closeEventModal()">×</button>
-            </div>
-
-            <div class="event-details-grid">
-                <div class="detail-box">
-                    <span>Event ID</span>
-                    <strong id="modal-event-id">-</strong>
-                </div>
-
-                <div class="detail-box">
-                    <span>Event Name</span>
-                    <strong id="modal-event-name">-</strong>
-                </div>
-
-                <div class="detail-box">
-                    <span>Timestamp</span>
-                    <strong id="modal-event-time">-</strong>
-                </div>
-
-                <div class="detail-box">
-                    <span>Username</span>
-                    <strong id="modal-event-user">-</strong>
-                </div>
-
-                <div class="detail-box">
-                    <span>Source IP</span>
-                    <strong id="modal-event-ip">-</strong>
-                </div>
-
-                <div class="detail-box">
-                    <span>Category</span>
-                    <strong id="modal-event-category">-</strong>
-                </div>
-
-                <div class="detail-box">
-                    <span>MITRE Technique</span>
-                    <strong id="modal-event-mitre">-</strong>
-                </div>
-
-                <div class="detail-box">
-                    <span>Event Type</span>
-                    <strong id="modal-event-type">-</strong>
-                </div>
-            </div>
-
-            <div class="event-section">
-                <h3>Event Details</h3>
-                <div id="modal-event-details" class="event-details">
-                    No additional details available.
-                </div>
-            </div>
-
-            <div class="event-section">
-                <h3>Related Alert</h3>
-                <div id="modal-related-alert" class="related-alert">
-                    Checking for related alerts...
-                </div>
-            </div>
-
+      <div class="flex items-center gap-4">
+        <div class="text-right">
+          <p class="text-xs font-mono" :class="apiOnline ? 'text-signal' : 'text-critical'" x-text="apiOnline ? 'API online' : 'API offline'"></p>
+          <p class="text-xs text-faint font-mono mt-0.5" x-text="lastUpdated"></p>
         </div>
-    </div>
+        <button
+          @click="manualRefresh()"
+          :disabled="refreshing"
+          class="border border-hairline2 hover:border-signal/50 hover:text-signal transition-colors text-sm px-4 py-2 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <span x-text="refreshing ? 'Refreshing…' : 'Refresh'"></span>
+        </button>
+      </div>
+    </header>
 
-    <script src="app.js"></script>
+    <!-- KPI strip -->
+    <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+      <template x-for="kpi in kpis" :key="kpi.label">
+        <div class="bg-surface border border-hairline rounded-md p-4">
+          <p class="text-xs text-muted mb-2" x-text="kpi.label"></p>
+          <p class="text-3xl font-mono font-semibold" :class="kpi.tone" x-text="kpi.value"></p>
+          <div class="h-[3px] w-full bg-hairline rounded-full mt-3 overflow-hidden">
+            <div class="h-full rounded-full" :class="kpi.barTone" :style="`width: ${kpi.bar}%`"></div>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- Analytics -->
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <div class="bg-surface border border-hairline rounded-md p-5">
+        <h2 class="text-sm font-medium text-muted mb-4">Events by category <span class="text-faint font-normal">— click to filter</span></h2>
+        <template x-if="categories.length === 0">
+          <p class="text-sm text-faint py-6 text-center">No category data</p>
+        </template>
+        <div class="space-y-3">
+          <template x-for="row in categories" :key="row.category">
+            <button
+              @click="filterByCategory(row.category)"
+              class="block w-full text-left rounded transition-colors"
+              :class="eventFilter?.type === 'category' && eventFilter?.value === row.category ? 'bg-raised' : 'hover:bg-raised/50'"
+            >
+              <div class="flex justify-between text-xs mb-1.5 px-1 pt-1">
+                <span class="text-ink" x-text="row.category"></span>
+                <span class="text-muted font-mono" x-text="row.count"></span>
+              </div>
+              <div class="h-1.5 bg-canvas rounded-full overflow-hidden mx-1 mb-1">
+                <div class="h-full bg-info rounded-full transition-all duration-500" :style="`width: ${row.pct}%`"></div>
+              </div>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <div class="bg-surface border border-hairline rounded-md p-5">
+        <h2 class="text-sm font-medium text-muted mb-4">Severity distribution <span class="text-faint font-normal">— click to filter</span></h2>
+        <template x-if="severities.length === 0">
+          <p class="text-sm text-faint py-6 text-center">No severity data</p>
+        </template>
+        <div class="space-y-3">
+          <template x-for="row in severities" :key="row.severity">
+            <button
+              @click="filterBySeverity(row.severity)"
+              class="block w-full text-left rounded transition-colors"
+              :class="eventFilter?.type === 'severity' && eventFilter?.value === row.severity ? 'bg-raised' : 'hover:bg-raised/50'"
+            >
+              <div class="flex justify-between text-xs mb-1.5 px-1 pt-1">
+                <span class="text-ink" x-text="row.severity"></span>
+                <span class="text-muted font-mono" x-text="row.count"></span>
+              </div>
+              <div class="h-1.5 bg-canvas rounded-full overflow-hidden mx-1 mb-1">
+                <div class="h-full rounded-full transition-all duration-500" :class="severityBarTone(row.severity)" :style="`width: ${row.pct}%`"></div>
+              </div>
+            </button>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- Alert trend -->
+    <section class="bg-surface border border-hairline rounded-md p-5 mb-6">
+      <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
+        <h2 class="text-sm font-medium text-muted">Alert trend <span class="text-faint font-normal">— alerts by day</span></h2>
+        <div class="flex items-center gap-1">
+          <template x-for="n in [7, 14, 30]" :key="n">
+            <button
+              @click="setTrendDays(n)"
+              class="text-xs px-2.5 py-1 rounded border transition-colors"
+              :class="trendDays === n ? 'border-signal/50 text-signal bg-signal/10' : 'border-hairline2 text-muted hover:text-ink'"
+              x-text="n + 'd'"
+            ></button>
+          </template>
+        </div>
+      </div>
+
+      <template x-if="trend.length === 0 || trend.every(d => d.total === 0)">
+        <p class="text-sm text-faint py-10 text-center">No alert activity in this window</p>
+      </template>
+
+      <template x-if="trend.length > 0 && trend.some(d => d.total > 0)">
+        <div>
+          <div class="flex items-end gap-1 h-[150px] border-b border-hairline">
+            <template x-for="d in trend" :key="d.day">
+              <div class="flex-1 flex flex-col justify-end h-full min-w-[3px]" :title="`${d.day} — ${d.total} alert(s)`">
+                <template x-for="seg in d.segments" :key="seg.severity">
+                  <div class="w-full first:rounded-t-sm" :class="severityBarTone(seg.severity)" :style="`height: ${seg.px}px`"></div>
+                </template>
+              </div>
+            </template>
+          </div>
+          <div class="flex gap-1 mt-2">
+            <template x-for="d in trend" :key="d.day + '-label'">
+              <div class="flex-1 text-center text-[10px] text-faint font-mono min-w-[3px]" x-text="d.label"></div>
+            </template>
+          </div>
+          <div class="flex items-center gap-4 mt-4 pt-4 border-t border-hairline text-xs">
+            <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-critical inline-block"></span>High</span>
+            <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-warning inline-block"></span>Medium</span>
+            <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-signal inline-block"></span>Low</span>
+            <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-faint inline-block"></span>Unknown</span>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- Main content -->
+    <section class="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4 mb-6 items-start">
+
+      <!-- Events ledger -->
+      <div class="bg-surface border border-hairline rounded-md overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-hairline gap-3 flex-wrap">
+          <h2 class="text-sm font-medium">Recent events</h2>
+          <div class="flex items-center gap-3">
+            <span
+              x-show="eventFilter"
+              class="flex items-center gap-1.5 text-xs bg-raised border border-hairline2 rounded-full pl-3 pr-1.5 py-1"
+            >
+              <span class="text-muted" x-text="eventFilter?.type === 'category' ? 'Category:' : 'Severity:'"></span>
+              <span class="text-ink font-mono" x-text="eventFilter?.value"></span>
+              <button @click="clearEventFilter()" class="text-faint hover:text-ink px-1 leading-none">✕</button>
+            </span>
+            <button @click="loadEvents()" class="text-xs text-muted hover:text-signal transition-colors">Refresh</button>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm min-w-[820px]">
+            <thead>
+              <tr class="text-left text-xs text-faint border-b border-hairline">
+                <th class="px-5 py-3 font-normal">Time</th>
+                <th class="px-3 py-3 font-normal">Event</th>
+                <th class="px-3 py-3 font-normal">Category</th>
+                <th class="px-3 py-3 font-normal">Severity</th>
+                <th class="px-3 py-3 font-normal">User</th>
+                <th class="px-3 py-3 font-normal">Source IP</th>
+                <th class="px-3 py-3 font-normal">MITRE</th>
+                <th class="px-5 py-3 font-normal"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-if="events.length === 0">
+                <tr><td colspan="8" class="px-5 py-8 text-center text-faint text-sm" x-text="eventsError ? 'Failed to load events' : 'No events found'"></td></tr>
+              </template>
+              <template x-for="event in events" :key="event.id">
+                <tr class="border-b border-hairline/60 hover:bg-raised/60 transition-colors">
+                  <td class="px-5 py-3 font-mono text-xs text-muted whitespace-nowrap" x-text="event.timestamp || '—'"></td>
+                  <td class="px-3 py-3 whitespace-nowrap" x-text="event.event_name || 'Other'"></td>
+                  <td class="px-3 py-3 text-muted whitespace-nowrap" x-text="event.category || '—'"></td>
+                  <td class="px-3 py-3 whitespace-nowrap">
+                    <span class="inline-flex items-center gap-1.5 text-xs" :class="severityText(event.severity)">
+                      <span class="h-1.5 w-1.5 rounded-full" :class="severityDot(event.severity)"></span>
+                      <span x-text="event.severity || 'UNKNOWN'"></span>
+                    </span>
+                  </td>
+                  <td class="px-3 py-3 font-mono text-xs whitespace-nowrap" x-text="event.username || '—'"></td>
+                  <td class="px-3 py-3 font-mono text-xs whitespace-nowrap" x-text="event.source_ip || '—'"></td>
+                  <td class="px-3 py-3 text-xs text-muted whitespace-nowrap" x-text="event.mitre_technique || '—'"></td>
+                  <td class="px-5 py-3 text-right whitespace-nowrap">
+                    <button @click="viewEvent(event)" class="text-xs border border-hairline2 hover:border-signal/50 hover:text-signal rounded px-2.5 py-1 transition-colors">
+                      View details
+                    </button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Alert stream -->
+      <div class="bg-surface border border-hairline rounded-md overflow-hidden">
+        <div class="px-5 py-4 border-b border-hairline">
+          <h2 class="text-sm font-medium">Active alerts</h2>
+        </div>
+        <div class="divide-y divide-hairline/60 max-h-[720px] overflow-y-auto">
+          <template x-if="alerts.length === 0">
+            <p class="text-sm text-faint py-8 text-center" x-text="alertsError ? 'Failed to load active alerts' : 'No active alerts'"></p>
+          </template>
+          <template x-for="a in alerts" :key="a.id">
+            <div class="pl-4 pr-5 py-4 border-l-2" :class="severityBorder(a.severity)">
+              <div class="flex items-start justify-between gap-2">
+                <p class="text-sm font-medium leading-snug" x-text="a.alert_type"></p>
+                <span class="text-[10px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0" :class="statusTone(a.status)" x-text="a.status || 'NEW'"></span>
+              </div>
+              <div class="mt-2 space-y-0.5 text-xs text-muted font-mono">
+                <p x-show="a.username">User <span class="text-ink" x-text="a.username"></span></p>
+                <p x-show="a.source_ip">Source <span class="text-ink" x-text="a.source_ip"></span></p>
+                <p x-show="a.mitre_technique">MITRE <span class="text-ink" x-text="a.mitre_technique"></span></p>
+              </div>
+              <p class="text-xs text-muted mt-2 leading-relaxed" x-text="a.description"></p>
+
+              <div class="flex flex-wrap gap-2 mt-3">
+                <button @click="toggleRelated(a.id)" class="text-xs text-muted hover:text-signal transition-colors">
+                  <span x-text="openRelated === a.id ? 'Hide events' : 'View events'"></span>
+                </button>
+                <button @click="investigate(a.id)" class="text-xs text-muted hover:text-signal transition-colors">Investigate</button>
+                <button @click="setStatus(a.id, 'RESOLVED')" class="text-xs text-signal hover:text-signal/80 transition-colors ml-auto">Resolve</button>
+              </div>
+
+              <div x-show="openRelated === a.id" x-collapse class="mt-3 pt-3 border-t border-hairline/60 space-y-2">
+                <template x-if="relatedLoading === a.id">
+                  <p class="text-xs text-faint">Loading related events…</p>
+                </template>
+                <template x-if="relatedLoading !== a.id && (relatedEvents[a.id] || []).length === 0">
+                  <p class="text-xs text-faint">No related events found</p>
+                </template>
+                <template x-for="ev in relatedEvents[a.id] || []" :key="ev.id">
+                  <div class="bg-canvas border border-hairline rounded px-3 py-2 text-xs flex items-center justify-between gap-2">
+                    <div>
+                      <p class="text-ink font-mono" x-text="'#' + ev.event_id + ' · ' + (ev.event_name || 'Unknown')"></p>
+                      <p class="text-faint font-mono mt-1" x-text="ev.timestamp"></p>
+                    </div>
+                    <button @click="viewEvent(ev)" class="shrink-0 text-xs border border-hairline2 hover:border-signal/50 hover:text-signal rounded px-2 py-1 transition-colors">View</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- Resolved alerts -->
+    <section class="bg-surface border border-hairline rounded-md overflow-hidden mb-8">
+      <button @click="resolvedOpen = !resolvedOpen; if (resolvedOpen) loadResolvedAlerts()" class="w-full flex items-center justify-between px-5 py-4 border-b border-hairline text-left">
+        <h2 class="text-sm font-medium">Resolved alerts</h2>
+        <span class="text-xs text-muted" x-text="resolvedOpen ? 'Hide' : 'Show'"></span>
+      </button>
+      <div x-show="resolvedOpen" x-collapse class="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+        <template x-if="resolvedAlerts.length === 0">
+          <p class="text-sm text-faint text-center py-4 col-span-2">No resolved alerts</p>
+        </template>
+        <template x-for="a in resolvedAlerts" :key="a.id">
+          <div class="border-l-2 border-signal/50 bg-canvas rounded pl-4 pr-4 py-3">
+            <p class="text-sm font-medium" x-text="a.alert_type"></p>
+            <p class="text-xs text-muted font-mono mt-1" x-text="(a.username || '—') + ' · ' + (a.source_ip || '—')"></p>
+            <p class="text-xs text-muted mt-2 leading-relaxed" x-text="a.description"></p>
+
+            <div class="flex flex-wrap gap-2 mt-3">
+              <button @click="toggleRelated(a.id)" class="text-xs text-muted hover:text-signal transition-colors">
+                <span x-text="openRelated === a.id ? 'Hide events' : 'View events'"></span>
+              </button>
+              <button @click="investigate(a.id)" class="text-xs text-muted hover:text-signal transition-colors">View investigation</button>
+            </div>
+
+            <div x-show="openRelated === a.id" x-collapse class="mt-3 pt-3 border-t border-hairline/60 space-y-2">
+              <template x-if="relatedLoading === a.id">
+                <p class="text-xs text-faint">Loading related events…</p>
+              </template>
+              <template x-if="relatedLoading !== a.id && (relatedEvents[a.id] || []).length === 0">
+                <p class="text-xs text-faint">No related events found</p>
+              </template>
+              <template x-for="ev in relatedEvents[a.id] || []" :key="ev.id">
+                <div class="bg-surface border border-hairline rounded px-3 py-2 text-xs flex items-center justify-between gap-2">
+                  <div>
+                    <p class="text-ink font-mono" x-text="'#' + ev.event_id + ' · ' + (ev.event_name || 'Unknown')"></p>
+                    <p class="text-faint font-mono mt-1" x-text="ev.timestamp"></p>
+                  </div>
+                  <button @click="viewEvent(ev)" class="shrink-0 text-xs border border-hairline2 hover:border-signal/50 hover:text-signal rounded px-2 py-1 transition-colors">View</button>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <footer class="text-center text-xs text-faint pb-8">MiniSIEM — local SOC dashboard</footer>
+  </div>
+
+  <!-- Investigation modal -->
+  <div
+    x-show="investigationOpen"
+    x-transition:enter="transition ease-out duration-150"
+    x-transition:enter-start="opacity-0"
+    x-transition:enter-end="opacity-100"
+    class="fixed inset-0 bg-black/70 flex items-center justify-center p-5 z-50"
+    style="display: none;"
+    @click.self="investigationOpen = false"
+  >
+    <div class="bg-surface border border-hairline rounded-md w-full max-w-2xl max-h-[88vh] overflow-y-auto">
+      <template x-if="investigationLoading">
+        <p class="text-sm text-faint p-8 text-center">Loading investigation…</p>
+      </template>
+
+      <template x-if="!investigationLoading && investigationAlert">
+        <div>
+          <div class="flex items-start justify-between px-6 py-5 border-b border-hairline">
+            <div>
+              <h2 class="text-lg font-semibold" x-text="investigationAlert.alert_type"></h2>
+              <span class="inline-block mt-2 text-xs font-mono px-2 py-0.5 rounded" :class="severityText(investigationAlert.severity) + ' ' + severityBg(investigationAlert.severity)" x-text="investigationAlert.severity"></span>
+            </div>
+            <button @click="investigationOpen = false" class="text-muted hover:text-ink text-xl leading-none">✕</button>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 px-6 py-5">
+            <div class="bg-canvas border border-hairline rounded p-3">
+              <p class="text-xs text-faint mb-1">Alert ID</p>
+              <p class="font-mono text-sm" x-text="'#' + investigationAlert.id"></p>
+            </div>
+            <div class="bg-canvas border border-hairline rounded p-3">
+              <p class="text-xs text-faint mb-1">Status</p>
+              <p class="font-mono text-sm" x-text="investigationAlert.status"></p>
+            </div>
+            <div class="bg-canvas border border-hairline rounded p-3">
+              <p class="text-xs text-faint mb-1">Source IP</p>
+              <p class="font-mono text-sm" x-text="investigationAlert.source_ip || '—'"></p>
+            </div>
+            <div class="bg-canvas border border-hairline rounded p-3">
+              <p class="text-xs text-faint mb-1">Username</p>
+              <p class="font-mono text-sm" x-text="investigationAlert.username || '—'"></p>
+            </div>
+            <div class="bg-canvas border border-hairline rounded p-3">
+              <p class="text-xs text-faint mb-1">MITRE technique</p>
+              <p class="font-mono text-sm" x-text="investigationAlert.mitre_technique || '—'"></p>
+            </div>
+            <div class="bg-canvas border border-hairline rounded p-3">
+              <p class="text-xs text-faint mb-1">Related events</p>
+              <p class="font-mono text-sm" x-text="investigationEvents.length"></p>
+            </div>
+          </div>
+
+          <div class="px-6 pb-5">
+            <h3 class="text-sm font-medium mb-2">Description</h3>
+            <p class="text-sm text-muted leading-relaxed" x-text="investigationAlert.description || '—'"></p>
+          </div>
+
+          <div class="px-6 pb-6">
+            <h3 class="text-sm font-medium mb-3">Timeline</h3>
+            <template x-if="investigationEvents.length === 0">
+              <p class="text-sm text-faint">No related events</p>
+            </template>
+            <div class="space-y-3">
+              <template x-for="(ev, idx) in [...investigationEvents].reverse()" :key="ev.id">
+                <div class="flex gap-3">
+                  <div class="flex flex-col items-center">
+                    <span class="h-6 w-6 rounded-full bg-raised border border-hairline2 flex items-center justify-center text-[11px] font-mono shrink-0" x-text="idx + 1"></span>
+                    <span class="w-px flex-1 bg-hairline" x-show="idx < investigationEvents.length - 1"></span>
+                  </div>
+                  <div class="bg-canvas border border-hairline rounded p-3 flex-1 mb-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="font-mono" x-text="'#' + ev.event_id"></span>
+                        <span class="text-muted" x-text="ev.event_name || 'Unknown'"></span>
+                      </div>
+                      <button @click="viewEvent(ev)" class="shrink-0 text-xs border border-hairline2 hover:border-signal/50 hover:text-signal rounded px-2 py-1 transition-colors">View</button>
+                    </div>
+                    <p class="text-xs text-faint font-mono mt-1" x-text="ev.timestamp"></p>
+                    <div class="flex gap-5 mt-2 text-xs">
+                      <span class="text-faint">User <span class="text-muted font-mono" x-text="ev.username || '—'"></span></span>
+                      <span class="text-faint">Source <span class="text-muted font-mono" x-text="ev.source_ip || '—'"></span></span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="flex gap-3 px-6 py-4 border-t border-hairline">
+            <template x-if="investigationAlert.status === 'RESOLVED'">
+              <p class="text-sm text-signal">This alert has been resolved.</p>
+            </template>
+            <template x-if="investigationAlert.status !== 'RESOLVED'">
+              <div class="flex gap-3">
+                <button
+                  @click="setStatus(investigationAlert.id, 'INVESTIGATING'); investigationOpen = false"
+                  :disabled="investigationAlert.status === 'INVESTIGATING'"
+                  class="text-sm border border-hairline2 rounded px-4 py-2 hover:border-warning/50 hover:text-warning transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >Mark investigating</button>
+                <button
+                  @click="setStatus(investigationAlert.id, 'RESOLVED'); investigationOpen = false"
+                  class="text-sm border border-signal/40 text-signal rounded px-4 py-2 hover:bg-signal/10 transition-colors"
+                >Resolve alert</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Event modal -->
+  <div
+    x-show="eventModalOpen"
+    x-transition:enter="transition ease-out duration-150"
+    x-transition:enter-start="opacity-0"
+    x-transition:enter-end="opacity-100"
+    class="fixed inset-0 bg-black/70 flex items-center justify-center p-5 z-50"
+    style="display: none;"
+    @click.self="eventModalOpen = false"
+    @keydown.escape.window="eventModalOpen = false; investigationOpen = false"
+  >
+    <div class="bg-surface border border-hairline rounded-md w-full max-w-xl max-h-[88vh] overflow-y-auto" x-show="selectedEvent">
+      <div class="flex items-start justify-between px-6 py-5 border-b border-hairline">
+        <div>
+          <h2 class="text-lg font-semibold">Event details</h2>
+          <span class="inline-block mt-2 text-xs font-mono px-2 py-0.5 rounded" :class="selectedEvent ? severityText(selectedEvent.severity) + ' ' + severityBg(selectedEvent.severity) : ''" x-text="selectedEvent?.severity || 'UNKNOWN'"></span>
+        </div>
+        <button @click="eventModalOpen = false" class="text-muted hover:text-ink text-xl leading-none">✕</button>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 px-6 py-5" x-show="selectedEvent">
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">Event ID</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.event_id || '—'"></p>
+        </div>
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">Event name</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.event_name || 'Other'"></p>
+        </div>
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">Timestamp</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.timestamp || '—'"></p>
+        </div>
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">Username</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.username || '—'"></p>
+        </div>
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">Source IP</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.source_ip || '—'"></p>
+        </div>
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">Category</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.category || '—'"></p>
+        </div>
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">MITRE technique</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.mitre_technique || '—'"></p>
+        </div>
+        <div class="bg-canvas border border-hairline rounded p-3">
+          <p class="text-xs text-faint mb-1">Event type</p>
+          <p class="font-mono text-sm" x-text="selectedEvent?.event_type || '—'"></p>
+        </div>
+      </div>
+
+      <div class="px-6 pb-6" x-show="selectedEvent">
+        <h3 class="text-sm font-medium mb-2">Details</h3>
+        <p class="text-sm text-muted leading-relaxed bg-canvas border border-hairline rounded p-3" x-text="selectedEvent?.description || selectedEvent?.message || 'No additional event details available.'"></p>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
