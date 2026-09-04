@@ -5,6 +5,8 @@ from typing import Optional
 from datetime import date, timedelta
 import sqlite3
 
+import database
+
 
 DATABASE = "siem.db"
 
@@ -21,16 +23,27 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+def ensure_schema():
+    # Runs the same migration collector.py runs, but from the API itself,
+    # so starting uvicorn alone (without ever running collector.py) still
+    # gets you a schema with log_type, alerts, and alert_events. This is
+    # what fixed the earlier "Failed to load events" 500s.
+    database.create_database()
+    database.create_alerts_table()
+    database.create_alert_events_table()
+
+
 # ==========================================================
 # CORS
 # ==========================================================
 
+# Wide open on purpose: local single-user tool, no login/session to
+# protect, and a fixed origin list breaks the moment the dashboard is
+# opened a different way (file://, a different dev-server port, etc).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5500",
-        "http://localhost:5500"
-    ],
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "PUT", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -131,11 +144,13 @@ def get_stats():
 
 @app.get("/api/events")
 def get_events(
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=20, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     category: Optional[str] = Query(default=None),
     severity: Optional[str] = Query(default=None),
     source_ip: Optional[str] = Query(default=None),
     username: Optional[str] = Query(default=None),
+    log_type: Optional[str] = Query(default=None),
 ):
     connection = get_connection()
     cursor = connection.cursor()
@@ -170,11 +185,25 @@ def get_events(
         conditions.append("username = ?")
         params.append(username)
 
+    if log_type:
+        conditions.append("log_type = ?")
+        params.append(log_type)
+
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    # Total count under the same filters, so the frontend can compute how
+    # many pages exist without ever fetching every matching row.
+    cursor.execute(f"""
+        SELECT COUNT(*)
+        FROM events
+        {where_clause}
+    """, params)
+    total = cursor.fetchone()[0]
 
     cursor.execute(f"""
         SELECT
             id,
+            log_type,
             timestamp,
             record_id,
             event_id,
@@ -195,8 +224,8 @@ def get_events(
         FROM events
         {where_clause}
         ORDER BY id DESC
-        LIMIT ?
-    """, (*params, limit))
+        LIMIT ? OFFSET ?
+    """, (*params, limit, offset))
 
     rows = cursor.fetchall()
 
@@ -204,6 +233,9 @@ def get_events(
 
     return {
         "count": len(rows),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
         "events": [dict(row) for row in rows]
     }
 
@@ -220,6 +252,7 @@ def get_event(event_id: int):
     cursor.execute("""
         SELECT
             id,
+            log_type,
             timestamp,
             record_id,
             event_id,
@@ -351,6 +384,121 @@ def get_alert_trend(days: int = Query(default=14, ge=1, le=90)):
 
 
 # ==========================================================
+# SECURITY EVENT TREND (collected Windows events per day)
+# ==========================================================
+# Deliberately named /api/event-trend (not /api/events/trend) — that's
+# what avoids the FastAPI routing collision with /api/events/{event_id}
+# below. Keep app.js pointed at this exact path.
+
+@app.get("/api/event-trend")
+def get_event_trend(days: int = Query(default=14, ge=1, le=90)):
+    """Return the severity trend for events collected from Windows.
+
+    Windows event timestamps are stored in the pywin32 format
+    ``Fri Aug 28 14:25:04 2026``.  Convert that value to SQLite's ISO date
+    format before grouping, rather than using the alert creation time.
+
+    Day-of-month is pulled through TRIM + printf('%02d', ...) rather than
+    a bare substr(), because pywin32's TimeGenerated.Format() pads
+    single-digit days with a space (e.g. "Sep  3", two spaces) rather
+    than a zero. A bare substr(timestamp, 9, 2) on such a row yields
+    " 3", which SQLite's date() can't parse — it silently returns NULL,
+    and that row drops out of every day in the window. Trimming the
+    space and re-padding with printf fixes both single- and double-digit
+    days.
+    """
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        WITH dated_events AS (
+            SELECT
+                date(
+                    substr(timestamp, 21, 4) || '-' ||
+                    CASE substr(timestamp, 5, 3)
+                        WHEN 'Jan' THEN '01' WHEN 'Feb' THEN '02'
+                        WHEN 'Mar' THEN '03' WHEN 'Apr' THEN '04'
+                        WHEN 'May' THEN '05' WHEN 'Jun' THEN '06'
+                        WHEN 'Jul' THEN '07' WHEN 'Aug' THEN '08'
+                        WHEN 'Sep' THEN '09' WHEN 'Oct' THEN '10'
+                        WHEN 'Nov' THEN '11' WHEN 'Dec' THEN '12'
+                    END || '-' || printf('%02d', CAST(TRIM(substr(timestamp, 9, 2)) AS INTEGER))
+                ) AS day,
+                COALESCE(severity, 'UNKNOWN') AS severity
+            FROM events
+            WHERE timestamp IS NOT NULL
+        )
+        SELECT day, severity, COUNT(*) AS count
+        FROM dated_events
+        WHERE day >= date('now', ?)
+        GROUP BY day, severity
+        ORDER BY day ASC
+    """, (f"-{days - 1} days",))
+
+    rows = cursor.fetchall()
+    connection.close()
+
+    today = date.today()
+    day_list = [
+        (today - timedelta(days=i)).isoformat()
+        for i in range(days - 1, -1, -1)
+    ]
+    by_day = {day: {} for day in day_list}
+
+    for row in rows:
+        if row["day"] in by_day:
+            by_day[row["day"]][row["severity"]] = row["count"]
+
+    return {
+        "days": day_list,
+        "trend": [
+            {"day": day, "severities": by_day[day]}
+            for day in day_list
+        ]
+    }
+
+
+# ==========================================================
+# ACTIVE ALERTS ONLY
+# ==========================================================
+# Registered before /api/alerts/{alert_id} on purpose — same reasoning
+# as /api/event-trend's placement relative to /api/events/{event_id}.
+# Not currently called by the frontend (it uses /api/alerts?status=...
+# instead), but fixed preemptively since it's the same bug class as the
+# one that caused the earlier 422s.
+
+@app.get("/api/alerts/active")
+def get_active_alerts():
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            created_at,
+            alert_type,
+            severity,
+            source_ip,
+            username,
+            description,
+            mitre_technique,
+            status
+        FROM alerts
+        WHERE status = 'NEW'
+        ORDER BY id DESC
+    """)
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return {
+        "count": len(rows),
+        "alerts": [dict(row) for row in rows]
+    }
+
+
+# ==========================================================
 # SINGLE ALERT
 # ==========================================================
 
@@ -416,6 +564,7 @@ def get_alert_events(alert_id: int):
     cursor.execute("""
         SELECT
             id,
+            log_type,
             timestamp,
             record_id,
             event_id,
@@ -494,41 +643,6 @@ def update_alert_status(alert_id: int, data: AlertStatusUpdate):
 
 
 # ==========================================================
-# ACTIVE ALERTS ONLY
-# ==========================================================
-
-@app.get("/api/alerts/active")
-def get_active_alerts():
-    connection = get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute("""
-        SELECT
-            id,
-            created_at,
-            alert_type,
-            severity,
-            source_ip,
-            username,
-            description,
-            mitre_technique,
-            status
-        FROM alerts
-        WHERE status = 'NEW'
-        ORDER BY id DESC
-    """)
-
-    rows = cursor.fetchall()
-
-    connection.close()
-
-    return {
-        "count": len(rows),
-        "alerts": [dict(row) for row in rows]
-    }
-
-
-# ==========================================================
 # EVENT CATEGORY SUMMARY
 # ==========================================================
 
@@ -579,4 +693,31 @@ def get_severity():
 
     return {
         "severity": [dict(row) for row in rows]
+    }
+
+
+# ==========================================================
+# LOG SOURCE SUMMARY (Security vs Application, etc.)
+# ==========================================================
+
+@app.get("/api/log-sources")
+def get_log_sources():
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT
+            COALESCE(log_type, 'Security') AS log_type,
+            COUNT(*) AS count
+        FROM events
+        GROUP BY log_type
+        ORDER BY count DESC
+    """)
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return {
+        "log_sources": [dict(row) for row in rows]
     }

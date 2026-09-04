@@ -164,10 +164,10 @@
       </div>
     </section>
 
-    <!-- Alert trend -->
+    <!-- Security event trend -->
     <section class="bg-surface border border-hairline rounded-md p-5 mb-6">
       <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
-        <h2 class="text-sm font-medium text-muted">Alert trend <span class="text-faint font-normal">— alerts by day</span></h2>
+        <h2 class="text-sm font-medium text-muted">Security event trend <span class="text-faint font-normal">— collected Windows events by day</span></h2>
         <div class="flex items-center gap-1">
           <template x-for="n in [7, 14, 30]" :key="n">
             <button
@@ -181,7 +181,7 @@
       </div>
 
       <template x-if="trend.length === 0 || trend.every(d => d.total === 0)">
-        <p class="text-sm text-faint py-10 text-center">No alert activity in this window</p>
+        <p class="text-sm text-faint py-10 text-center">No collected events in this window</p>
       </template>
 
       <template x-if="trend.length > 0 && trend.some(d => d.total > 0)">
@@ -201,9 +201,10 @@
             </template>
           </div>
           <div class="flex items-center gap-4 mt-4 pt-4 border-t border-hairline text-xs">
-            <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-critical inline-block"></span>High</span>
+            <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-critical inline-block"></span>Critical / High</span>
             <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-warning inline-block"></span>Medium</span>
             <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-signal inline-block"></span>Low</span>
+            <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-info inline-block"></span>Info</span>
             <span class="flex items-center gap-1.5 text-muted"><span class="h-2 w-2 rounded-sm bg-faint inline-block"></span>Unknown</span>
           </div>
         </div>
@@ -260,7 +261,18 @@
                   </td>
                   <td class="px-3 py-3 font-mono text-xs whitespace-nowrap" x-text="event.username || '—'"></td>
                   <td class="px-3 py-3 font-mono text-xs whitespace-nowrap" x-text="event.source_ip || '—'"></td>
-                  <td class="px-3 py-3 text-xs text-muted whitespace-nowrap" x-text="event.mitre_technique || '—'"></td>
+                  <td class="px-3 py-3 text-xs whitespace-nowrap">
+                    
+                      <a
+                        x-show="mitreUrl(event.mitre_technique)"
+                      :href="mitreUrl(event.mitre_technique)"
+                      target="_blank" rel="noopener noreferrer"
+                      class="text-info hover:underline"
+                      x-text="event.mitre_technique"
+                      @click.stop
+                    ></a>
+                    <span x-show="!mitreUrl(event.mitre_technique)" class="text-muted" x-text="event.mitre_technique || '—'"></span>
+                  </td>
                   <td class="px-5 py-3 text-right whitespace-nowrap">
                     <button @click="viewEvent(event)" class="text-xs border border-hairline2 hover:border-signal/50 hover:text-signal rounded px-2.5 py-1 transition-colors">
                       View details
@@ -270,6 +282,56 @@
               </template>
             </tbody>
           </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="flex items-center justify-between gap-4 px-5 py-3 border-t border-hairline flex-wrap">
+          <div class="flex items-center gap-2 text-xs text-muted">
+            <span>Rows:</span>
+            <template x-for="size in [20, 50, 100]" :key="size">
+              <button
+                @click="setPageSize(size)"
+                class="px-2 py-1 rounded border transition-colors"
+                :class="pageSize === size ? 'border-signal/50 text-signal bg-signal/10' : 'border-hairline2 text-muted hover:text-ink'"
+                x-text="size"
+              ></button>
+            </template>
+          </div>
+
+          <span class="text-xs text-faint font-mono" x-text="pageRangeLabel"></span>
+
+          <div class="flex items-center gap-1">
+            <button
+              @click="goToPage(currentPage - 1)"
+              :disabled="currentPage === 1"
+              class="px-2 py-1 rounded border border-hairline2 text-xs text-muted hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed"
+            >‹</button>
+
+            <template x-if="pageNumbers[0] > 1">
+              <button @click="goToPage(1)" class="px-2.5 py-1 rounded border border-hairline2 text-xs text-muted hover:text-ink">1</button>
+            </template>
+            <span x-show="pageNumbers[0] > 2" class="text-xs text-faint px-1">…</span>
+
+            <template x-for="n in pageNumbers" :key="n">
+              <button
+                @click="goToPage(n)"
+                class="px-2.5 py-1 rounded border text-xs transition-colors"
+                :class="n === currentPage ? 'border-signal/50 text-signal bg-signal/10' : 'border-hairline2 text-muted hover:text-ink'"
+                x-text="n"
+              ></button>
+            </template>
+
+            <span x-show="pageNumbers[pageNumbers.length - 1] < totalPages - 1" class="text-xs text-faint px-1">…</span>
+            <template x-if="pageNumbers[pageNumbers.length - 1] < totalPages">
+              <button @click="goToPage(totalPages)" class="px-2.5 py-1 rounded border border-hairline2 text-xs text-muted hover:text-ink" x-text="totalPages"></button>
+            </template>
+
+            <button
+              @click="goToPage(currentPage + 1)"
+              :disabled="currentPage === totalPages"
+              class="px-2 py-1 rounded border border-hairline2 text-xs text-muted hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed"
+            >›</button>
+          </div>
         </div>
       </div>
 
@@ -291,7 +353,18 @@
               <div class="mt-2 space-y-0.5 text-xs text-muted font-mono">
                 <p x-show="a.username">User <span class="text-ink" x-text="a.username"></span></p>
                 <p x-show="a.source_ip">Source <span class="text-ink" x-text="a.source_ip"></span></p>
-                <p x-show="a.mitre_technique">MITRE <span class="text-ink" x-text="a.mitre_technique"></span></p>
+                <p x-show="a.mitre_technique">
+                  MITRE
+                  
+                    <a
+                      x-show="mitreUrl(a.mitre_technique)"
+                    :href="mitreUrl(a.mitre_technique)"
+                    target="_blank" rel="noopener noreferrer"
+                    class="text-info hover:underline"
+                    x-text="a.mitre_technique"
+                  ></a>
+                  <span x-show="!mitreUrl(a.mitre_technique)" class="text-ink" x-text="a.mitre_technique"></span>
+                </p>
               </div>
               <p class="text-xs text-muted mt-2 leading-relaxed" x-text="a.description"></p>
 
@@ -418,7 +491,15 @@
             </div>
             <div class="bg-canvas border border-hairline rounded p-3">
               <p class="text-xs text-faint mb-1">MITRE technique</p>
-              <p class="font-mono text-sm" x-text="investigationAlert.mitre_technique || '—'"></p>
+              
+                <a
+                  x-show="mitreUrl(investigationAlert.mitre_technique)"
+                :href="mitreUrl(investigationAlert.mitre_technique)"
+                target="_blank" rel="noopener noreferrer"
+                class="font-mono text-sm text-info hover:underline"
+                x-text="investigationAlert.mitre_technique"
+              ></a>
+              <p x-show="!mitreUrl(investigationAlert.mitre_technique)" class="font-mono text-sm" x-text="investigationAlert.mitre_technique || '—'"></p>
             </div>
             <div class="bg-canvas border border-hairline rounded p-3">
               <p class="text-xs text-faint mb-1">Related events</p>
@@ -500,7 +581,10 @@
       <div class="flex items-start justify-between px-6 py-5 border-b border-hairline">
         <div>
           <h2 class="text-lg font-semibold">Event details</h2>
-          <span class="inline-block mt-2 text-xs font-mono px-2 py-0.5 rounded" :class="selectedEvent ? severityText(selectedEvent.severity) + ' ' + severityBg(selectedEvent.severity) : ''" x-text="selectedEvent?.severity || 'UNKNOWN'"></span>
+          <div class="flex items-center gap-2 mt-2">
+            <span class="text-xs font-mono px-2 py-0.5 rounded" :class="selectedEvent ? severityText(selectedEvent.severity) + ' ' + severityBg(selectedEvent.severity) : ''" x-text="selectedEvent?.severity || 'UNKNOWN'"></span>
+            <span x-show="selectedEvent?.log_type" class="text-xs font-mono px-2 py-0.5 rounded bg-raised text-muted" x-text="selectedEvent?.log_type"></span>
+          </div>
         </div>
         <button @click="eventModalOpen = false" class="text-muted hover:text-ink text-xl leading-none">✕</button>
       </div>
@@ -532,7 +616,15 @@
         </div>
         <div class="bg-canvas border border-hairline rounded p-3">
           <p class="text-xs text-faint mb-1">MITRE technique</p>
-          <p class="font-mono text-sm" x-text="selectedEvent?.mitre_technique || '—'"></p>
+          
+            <a
+              x-show="mitreUrl(selectedEvent?.mitre_technique)"
+            :href="mitreUrl(selectedEvent?.mitre_technique)"
+            target="_blank" rel="noopener noreferrer"
+            class="font-mono text-sm text-info hover:underline"
+            x-text="selectedEvent?.mitre_technique"
+          ></a>
+          <p x-show="!mitreUrl(selectedEvent?.mitre_technique)" class="font-mono text-sm" x-text="selectedEvent?.mitre_technique || '—'"></p>
         </div>
         <div class="bg-canvas border border-hairline rounded p-3">
           <p class="text-xs text-faint mb-1">Event type</p>

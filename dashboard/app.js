@@ -21,7 +21,12 @@ function dashboard() {
     severities: [],
     eventFilter: null, // { type: 'category' | 'severity', value: string }
 
-    // alert trend
+    // events pagination
+    pageSize: 20,
+    currentPage: 1,
+    totalEvents: 0,
+
+    // collected Windows security-event trend
     trendDays: 14,
     trend: [],
 
@@ -50,6 +55,45 @@ function dashboard() {
         { label: "Active alerts", value: s.active_alerts, tone: "text-warning", barTone: "bg-warning", bar: Math.min(100, (s.active_alerts / denom) * 100) },
         { label: "Source IPs", value: s.unique_source_ips, tone: "text-ink", barTone: "bg-info", bar: Math.min(100, (s.unique_source_ips / denom) * 100) },
       ];
+    },
+
+    // ---- pagination helpers ----
+    get totalPages() {
+      return Math.max(1, Math.ceil(this.totalEvents / this.pageSize));
+    },
+
+    // Window of up to 5 page numbers centered on the current page,
+    // e.g. current=6 -> [4,5,6,7,8], clamped at both ends.
+    get pageNumbers() {
+      const total = this.totalPages;
+      const windowSize = 5;
+      let start = Math.max(1, this.currentPage - Math.floor(windowSize / 2));
+      let end = Math.min(total, start + windowSize - 1);
+      start = Math.max(1, end - windowSize + 1);
+      const pages = [];
+      for (let i = start; i <= end; i++) pages.push(i);
+      return pages;
+    },
+
+    get pageRangeLabel() {
+      if (this.totalEvents === 0) return "0 of 0";
+      const from = (this.currentPage - 1) * this.pageSize + 1;
+      const to = Math.min(this.currentPage * this.pageSize, this.totalEvents);
+      return `${from}–${to} of ${this.totalEvents}`;
+    },
+
+    setPageSize(size) {
+      if (this.pageSize === size) return;
+      this.pageSize = size;
+      this.currentPage = 1;
+      this.loadEvents();
+    },
+
+    goToPage(page) {
+      const clamped = Math.min(Math.max(1, page), this.totalPages);
+      if (clamped === this.currentPage) return;
+      this.currentPage = clamped;
+      this.loadEvents();
     },
 
     async init() {
@@ -90,19 +134,19 @@ function dashboard() {
     async loadEvents() {
       try {
         const params = new URLSearchParams();
-        // Filtered views pull a much larger window so drilling into a
-        // category/severity actually shows the matching events, not
-        // just whichever happened to be in the last 20 overall.
-        params.set("limit", this.eventFilter ? "200" : "20");
+        params.set("limit", this.pageSize);
+        params.set("offset", (this.currentPage - 1) * this.pageSize);
         if (this.eventFilter) {
           params.set(this.eventFilter.type, this.eventFilter.value);
         }
         const data = await this.fetchJSON(`${API}/api/events?${params.toString()}`);
         this.events = data.events || [];
+        this.totalEvents = data.total || 0;
         this.eventsError = false;
       } catch (e) {
         console.error("Failed to load events:", e);
         this.events = [];
+        this.totalEvents = 0;
         this.eventsError = true;
       }
     },
@@ -110,17 +154,20 @@ function dashboard() {
     filterByCategory(category) {
       const isSame = this.eventFilter?.type === "category" && this.eventFilter?.value === category;
       this.eventFilter = isSame ? null : { type: "category", value: category };
+      this.currentPage = 1;
       this.loadEvents();
     },
 
     filterBySeverity(severity) {
       const isSame = this.eventFilter?.type === "severity" && this.eventFilter?.value === severity;
       this.eventFilter = isSame ? null : { type: "severity", value: severity };
+      this.currentPage = 1;
       this.loadEvents();
     },
 
     clearEventFilter() {
       this.eventFilter = null;
+      this.currentPage = 1;
       this.loadEvents();
     },
 
@@ -169,11 +216,11 @@ function dashboard() {
 
     async loadTrend() {
       const BAR_HEIGHT_PX = 150;
-      const severityOrder = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"];
+      const severityOrder = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"];
       const labelStep = this.trendDays <= 7 ? 1 : this.trendDays <= 14 ? 2 : 5;
 
       try {
-        const data = await this.fetchJSON(`${API}/api/alerts/trend?days=${this.trendDays}`);
+        const data = await this.fetchJSON(`${API}/api/event-trend?days=${this.trendDays}`);
         const rows = data.trend || [];
 
         const totals = rows.map((r) => Object.values(r.severities || {}).reduce((a, b) => a + b, 0));
@@ -198,7 +245,7 @@ function dashboard() {
           };
         });
       } catch (e) {
-        console.error("Failed to load alert trend:", e);
+        console.error("Failed to load security event trend:", e);
         this.trend = [];
       }
     },
@@ -289,6 +336,28 @@ function dashboard() {
       }
     },
 
+    // ---- MITRE ATT&CK ----
+    // Turns "T1110" -> https://attack.mitre.org/techniques/T1110/
+    // and "T1555.004" -> https://attack.mitre.org/techniques/T1555/004/
+    // Returns null for anything that isn't a recognizable technique ID,
+    // so the template can fall back to plain text instead of a dead link.
+    mitreUrl(technique) {
+      if (technique === null || technique === undefined) return null;
+
+      const value = String(technique).trim().toUpperCase();
+
+      // Supports T1059 and sub-techniques such as T1059.001.
+      const match = value.match(/^T(\d{4})(?:\.(\d{3}))?$/);
+
+      if (!match) return null;
+
+      const [, base, sub] = match;
+
+      return sub
+        ? `https://attack.mitre.org/techniques/T${base}/${sub}/`
+        : `https://attack.mitre.org/techniques/T${base}/`;
+    },
+
     // ---- styling helpers ----
     severityText(sev) {
       const s = (sev || "").toUpperCase();
@@ -323,6 +392,7 @@ function dashboard() {
       if (s === "HIGH" || s === "CRITICAL") return "bg-critical";
       if (s === "MEDIUM") return "bg-warning";
       if (s === "LOW") return "bg-signal";
+      if (s === "INFO") return "bg-info";
       return "bg-faint";
     },
     statusTone(status) {
